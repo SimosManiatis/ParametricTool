@@ -1,0 +1,9 @@
+Metadata-Version: 2.1
+Name: ghhops_server
+Version: 1.5.5
+Summary: Grasshopper Hops Server
+Home-page: https://github.com/mcneel/compute.rhino3d/tree/master/src/ghhops-server-py
+Author: Robert McNeel & Associates
+Author-email: ehsan@mcneel.com
+Classifier: License :: OSI Approved :: MIT License
+Requires-Dist: rhino3dm

@@ -1,0 +1,9 @@
+{
+    "python.defaultInterpreterPath": "${workspaceFolder}/nen5060_service/python_runtime/python.exe",
+    "terminal.integrated.env.windows": {
+        "PYTHONPATH": "${workspaceFolder}/nen5060_service"
+    },
+    "python.analysis.extraPaths": [
+        "./nen5060_service"
+    ]
+}
