@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Internal Python Runtime (Generated)
+**/python_runtime/
+
+# IDE settings
+.vscode/
+.idea/
+
+# Rhino/Grasshopper
+*.gh#
+*.3dm.bak
+*.3dm.rhl
+
+# OS generated
+Thumbs.db
+Desktop.ini
+.DS_Store
