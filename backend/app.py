@@ -15,6 +15,7 @@ import json
 # Updated import for new folder structure
 # We also need rhino_mesh_to_trimesh for the app optimization
 from core.classification_logic import classify_window_logic, rhino_mesh_to_trimesh
+from core.table_formatter import format_table_header, format_table_row, format_table_summary
 from ghhops_server.params import _GHParam, HopsParamAccess
 import core.classification_logic
 print(f"[DEBUG] Loaded logic from: {core.classification_logic.__file__}")
@@ -161,9 +162,36 @@ def nen5060_classify(window_meshes, shading_meshes, context_meshes, month):
             results_class.append(result["classification"])
             results_fsh.append(result["fsh_factor"])
             results_ori.append(result["orientation"])
-            results_dbg.append(result["debug_info"]) # String, not JSON dump
+            # Debug info in result is the VERBOSE trace. Keep it somewhere?
+            # User wants the TABLE report in Dbg.
+            
+            # We add result dict to temporary list for table generation
+            results_dbg.append(result) 
         
-        return results_class, results_fsh, results_ori, results_dbg
+        # --- GENERATE REPORT TABLE ---
+        # --- GENERATE REPORT TABLE ---
+        # 1. Header (returns list)
+        full_report_lines = format_table_header(
+            num_windows=len(window_meshes),
+            num_shading=len(shading_meshes),
+            num_context=len(valid_context_data), 
+            month=int(month)
+        )
+        
+        # 2. Rows
+        for i, res in enumerate(results_dbg):
+             # format_table_row returns a single string line
+             full_report_lines.append(format_table_row(i, res))
+             
+        # 3. Summary (returns list)
+        full_report_lines.extend(format_table_summary(results_dbg))
+        
+        # Return LIST OF STRINGS. 
+        # Grasshopper Panel will display each item on a new line.
+        # This solves the "\n" escaping issue and "wonky" wrapping.
+        final_dbg_output = full_report_lines
+        
+        return results_class, results_fsh, results_ori, final_dbg_output
         
     except Exception as e:
         import traceback
