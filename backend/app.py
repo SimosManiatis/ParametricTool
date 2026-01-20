@@ -124,18 +124,26 @@ def nen5060_classify(window_meshes, shading_meshes, context_meshes, month):
         results_ori = []
         results_dbg = []
 
+        print(f"[DEBUG] Processing {len(window_meshes)} windows, {len(shading_meshes)} shading meshes, {len(valid_context_data)} context items.")
+        
         # Iterate over all windows
         for i, win_mesh in enumerate(window_meshes):
-            # Combine all shading meshes into one for the logic
-            joined_shading = rhino3dm.Mesh()
-            if shading_meshes:
-                for sm in shading_meshes:
-                     if sm: joined_shading.Append(sm)
+            # Use corresponding shading mesh (1:1 mapping)
+            # This matches the Internal GH Component logic
+            current_shading = None
+            if shading_meshes and i < len(shading_meshes):
+                current_shading = shading_meshes[i]
             
+            if i < 5:
+                print(f"[DEBUG] Win {i}: Has Shading? {current_shading is not None}")
+                if current_shading:
+                    bb = current_shading.GetBoundingBox()
+                    print(f"        Shading BBox: {bb.Min} to {bb.Max}")
+
             # Pass PRE-PROCESSED context data
             result = classify_window_logic(
                 window_mesh=win_mesh,
-                shading_mesh=joined_shading, 
+                shading_mesh=current_shading, 
                 context_data=valid_context_data, # NEW SIGNATURE
                 month=int(month),
                 window_index=i,

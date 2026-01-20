@@ -38,7 +38,7 @@ def run_test():
     result = classify_window_logic(
         window_mesh=window,
         shading_mesh=shading,
-        context_meshes=[],
+        context_data=[],
         month=6,
         debug_mode=True
     )
@@ -49,7 +49,7 @@ def run_test():
     assert result["orientation"] == "Zuid", f"Expected Zuid, got {result['orientation']}"
     assert result["classification"] == "Overstek", f"Expected Overstek, got {result['classification']}"
     
-    print("\n✅ Verification SUCCESS!")
+    print("\n[SUCCESS] Verification PASSED!")
 
 if __name__ == "__main__":
     run_test()

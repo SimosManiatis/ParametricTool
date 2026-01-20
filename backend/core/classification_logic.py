@@ -320,6 +320,13 @@ def cast_rays_for_context(sample_points, ray_directions, context_trimesh, debug_
         final_angle = weighted_avg * 0.7 + absolute_max * 0.3
     else:
         final_angle = 0.0
+        weighted_avg = 0.0
+        absolute_max = 0.0
+
+    if debug_info is not None:
+         debug_info.append("    Context Rays: {} cast, {} blocked".format(total_rays_cast, total_rays_blocked))
+         if total_weight > 0:
+             debug_info.append("    Angles: Max {:.1f}deg, Weighted Avg {:.1f}deg, Final {:.1f}deg".format(absolute_max, weighted_avg, final_angle))
         
     return final_angle
 
@@ -436,12 +443,16 @@ def cast_rays_for_shading(window_center, window_normal, window_bbox, shading_tri
     ho_ratio = math.tan(math.radians(min_blocked_elevation))
         
     # Return:
-    # 1. Angle from Zenith (compatible with main logic expectation `shd_angle`)
-    #    Main logic does: `shd_blocked = 90 - shd_angle`.
-    #    So we should return `shd_angle_from_zenith`.
+    # 1. Minimum Blocked Elevation (Angle from Horizon)
+    #    This matches the internal script's 'shd_angle' output (which is an elevation).
+    #    The main logic will convert this to 'blocked degrees' via (90 - elevation).
     # 2. ho_ratio
     
-    return shd_angle_from_zenith, ho_ratio
+    if debug_info is not None:
+        debug_info.append("    Min Blocked Elevation: {:.1f}deg".format(min_blocked_elevation))
+        debug_info.append("    ho_ratio: {:.3f}".format(ho_ratio))
+    
+    return min_blocked_elevation, ho_ratio
 
 # ==============================================================================
 # CONTEXT FILTERING
@@ -568,107 +579,146 @@ def classify_window_logic(window_mesh, shading_mesh, context_data, month, window
     Analyze a single window using NEN 5060 logic.
     """
     
-    # 1. Properties
+    # 1. Properties - Header
+    debug_lines = []
+    if debug_mode:
+        debug_lines.append("=" * 70)
+        debug_lines.append("WINDOW {} ANALYSIS".format(window_index))
+        debug_lines.append("=" * 70)
+    
     w_center, w_normal, w_bbox = get_mesh_center_and_normal(window_mesh)
     if w_center is None:
+        if debug_mode: debug_lines.append("ERROR: Invalid Window Mesh")
         return {
             "classification": "Error",
             "fsh_factor": 1.0, "orientation": "Unknown", "ho_ratio": 0.0,
             "context_angle": 0.0, "shading_angle": 90.0, "context_blocked": 0.0, "shading_blocked": 0.0,
-            "dominant_factor": "Error", "debug_info": "ERROR: Invalid Window Mesh"
+            "dominant_factor": "Error", "debug_info": "\n".join(debug_lines)
         }
         
-    # window_height = w_bbox.Max.Z - w_bbox.Min.Z
+    window_height = w_bbox.Max.Z - w_bbox.Min.Z
     orientation = vector_to_compass_orientation(w_normal)
+    
+    if debug_mode:
+        debug_lines.append("\n[1] WINDOW PROPERTIES")
+        debug_lines.append("    Center: ({:.2f}, {:.2f}, {:.2f})".format(w_center.X, w_center.Y, w_center.Z))
+        debug_lines.append("    Normal: ({:.3f}, {:.3f}, {:.3f})".format(w_normal.X, w_normal.Y, w_normal.Z))
+        debug_lines.append("    Size: {:.2f}m height".format(window_height))
+        debug_lines.append("    Orientation: {}".format(orientation))
     
     # 2. Ray setup (Context)
     ray_directions = create_ray_directions(w_normal)
     sample_points = get_window_sample_points(w_bbox, w_normal)
     
+    if debug_mode:
+        debug_lines.append("\n[2] RAY CASTING SETUP")
+        debug_lines.append("    {} sample points on window".format(len(sample_points)))
+        debug_lines.append("    {} ray directions per sample".format(len(ray_directions)))
+    
     # 3. Context Analysis
     relevant_context = filter_context_for_window(context_data, w_center, w_normal, w_bbox)
+    
+    if debug_mode:
+        debug_lines.append("\n[3] CONTEXT ANALYSIS")
+        debug_lines.append("    {} of {} context objects in front of window".format(
+            len(relevant_context), len(context_data)))
+
     combined_context = None
     if relevant_context:
         meshes = [item[0] for item in relevant_context]
         if meshes:
              combined_context = trimesh.util.concatenate(meshes)
              
-    ctx_angle = cast_rays_for_context(sample_points, ray_directions, combined_context)
+    ctx_angle = cast_rays_for_context(sample_points, ray_directions, combined_context, debug_lines if debug_mode else None)
 
     # 4. Shading Analysis
+    if debug_mode:
+         debug_lines.append("\n[4] SHADING ANALYSIS")
+         
     shading_trimesh = rhino_mesh_to_trimesh(shading_mesh) if shading_mesh else None
-    shd_angle_from_zenith, shd_ho = cast_rays_for_shading(w_center, w_normal, w_bbox, shading_trimesh)
+    shd_angle_from_zenith, shd_ho = cast_rays_for_shading(
+        w_center, w_normal, w_bbox, shading_trimesh, 
+        debug_lines if debug_mode else None)
     
     # 5. Decision
-    # ctx_angle is "Angle from Zenith to TOP of obstruction" ? NO.
-    # Based on cast_rays_for_context (0.0 default), ctx_angle is ELEVATION of obstruction.
-    # ctx_blocked = Elevation of obstruction.
+    # Use Logic from Overstek_Belemmering_GH.py (v7.0)
+    
+    # Context: ctx_angle is degrees of sky blocked from horizon up
     ctx_blocked = ctx_angle 
     
-    # shd_angle_from_zenith is "Angle from Zenith to BOTTOM of overhang".
-    # shd_blocked = Elevation of overhang bottom.
-    shd_blocked = 90.0 - shd_angle_from_zenith
+    # Shading: shd_angle is elevation. Blocked is 90 - elevation (Zenith down)
+    # shd_angle_from_zenith is actually min_blocked_elevation now (based on previous edit)
+    shd_elevation = shd_angle_from_zenith
+    shd_blocked = 90.0 - shd_elevation
     
-    # Thresholds
-    # Context: If Obstruction rises ABOVE 20 deg elevation -> Significant
-    ctx_sig = ctx_blocked > CONTEXT_THRESHOLD
+    # Thresholds (Match Internal Script)
+    # Both factors use 20.0 degree threshold for significance
+    MINIMAL_OBSTRUCTION_THRESHOLD = 20.0
     
-    # Shading: If Overhang dips BELOW 45 deg elevation -> Significant
-    # But only if an overhang actually exists (shd_blocked < 90/89?)
-    # If clear sky -> shd_blocked = 90. 90 !< 45. Minimal.
-    has_overhang = shading_mesh is not None and shd_blocked < 89.0
-    shd_sig = has_overhang and (shd_blocked < OVERHANG_THRESHOLD)
+    ctx_sig = ctx_blocked > MINIMAL_OBSTRUCTION_THRESHOLD
+    # Ensure shading mesh exists for shading to be significant
+    shd_sig = (shading_mesh is not None) and (shd_blocked > MINIMAL_OBSTRUCTION_THRESHOLD)
     
+    if debug_mode:
+        debug_lines.append("\n[5] CLASSIFICATION DECISION")
+        debug_lines.append("    Context: {:.1f}deg angle -> {:.1f}deg blocked {}".format(
+            ctx_angle, ctx_blocked, "(SIGNIFICANT)" if ctx_sig else "(minimal)"))
+        debug_lines.append("    Shading: {:.1f}deg angle -> {:.1f}deg blocked {}".format(
+            shd_elevation, shd_blocked, "(SIGNIFICANT)" if shd_sig else "(minimal)"))
+        debug_lines.append("    Threshold: {:.1f}deg".format(MINIMAL_OBSTRUCTION_THRESHOLD))
+
     classification = "Minimale Belemmering"
     final_ho = 0.0
     dominant = "Neither"
 
-    if ctx_sig and shd_sig:
-        # Both significant. Choose dominant.
-        # Dominant is the one providing MORE shading.
-        # Context: Higher angle = More shading.
-        # Shading: Lower angle = More shading.
-        # Hard to compare directly. NTA 17.3.7 suggests "Volledige Belemmering" if both present.
-        # But we only support Table lookup logic for now.
-        # Fallback: Compare "Blockage Impact".
-        # Ctx Impact = ctx_blocked (e.g. 30 deg).
-        # Shd Impact = 90 - shd_blocked (e.g. 90 - 30 = 60 deg blocked from top).
-        # If Shading blocks 60 deg (down to 30), and Context blocks 30 deg (up to 30).
-        # Shading is dominant.
-        if (90 - shd_blocked) > ctx_blocked:
-            classification = "Overstek"
-            final_ho = shd_ho
-            dominant = "Shading"
-        else:
-            classification = "Belemmering"
-            final_ho = angle_to_ho_ratio_approximation(ctx_angle) # ho = tan(ctx_elevation)
-            dominant = "Context"
-            
-    elif shd_sig:
-        classification = "Overstek"
-        final_ho = shd_ho
-        dominant = "Shading"
-    elif ctx_sig:
-        classification = "Belemmering"
-        final_ho = angle_to_ho_ratio_approximation(ctx_angle)
-        dominant = "Context"
-    else:
+    # Decision Logic (Direct port from Internal)
+    if not ctx_sig and not shd_sig:
+        # Neither factor blocks significant sky
         classification = "Minimale Belemmering"
         final_ho = 0.0
-        dominant = "Neither"
+        dominant = f"Neither (<{int(MINIMAL_OBSTRUCTION_THRESHOLD)}deg)"
+        
+    elif shd_sig and (not ctx_sig or shd_blocked >= ctx_blocked):
+        # Shading blocks more (or equal) sky
+        classification = "Overstek"
+        final_ho = shd_ho
+        dominant = f"Shading ({shd_blocked:.0f}deg >= {ctx_blocked:.0f}deg)"
+        
+    else:
+        # Context blocks more sky
+        classification = "Belemmering"
+        final_ho = angle_to_ho_ratio_approximation(ctx_angle)
+        dominant = f"Context ({ctx_blocked:.0f}deg > {shd_blocked:.0f}deg)"
+    
+    if debug_mode:
+        debug_lines.append("    -> Dominant factor: {}".format(dominant))
+        debug_lines.append("    -> Classification: {}".format(classification))
         
     # 6. Lookup
     fsh = lookup_fsh_factor(classification, orientation, month, final_ho, calc_type=calc_type)
     
-    # Build COMPACT debug string
     if debug_mode:
-        debug_str = (
-            f"W{window_index}|{orientation}|"
-            f"Ctx:{ctx_blocked:.0f}deg|Shd:{shd_blocked:.0f}deg|"
-            f"{classification}|Fsh={fsh:.2f}"
-        )
-    else:
-        debug_str = ""
+        debug_lines.append("\n[6] FSH LOOKUP")
+        debug_lines.append("    ho ratio: {:.3f} -> category: {}".format(
+            final_ho, get_ho_category(final_ho)))
+        if classification == "Minimale Belemmering":
+            debug_lines.append("    Table: 17.4[{}][{}] = {:.3f}".format(
+                month, orientation, fsh))
+        else:
+            debug_lines.append("    Table: 17.7[{}][{}][{}] = {:.3f}".format(
+                month, orientation, get_ho_category(final_ho), fsh))
+    
+    # Summary
+    if debug_mode:
+        debug_lines.append("\n" + "=" * 70)
+        debug_lines.append("RESULT: {} | {} | Fsh={:.3f} | ho={:.3f}".format(
+            classification, orientation, fsh, final_ho))
+        debug_lines.append("=" * 70)
+
+    # Build COMPACT debug string (Optional: Can remove if user only wants Verbose)
+    # For now, we return the VERBOSE string in 'debug_info'
+    
+    debug_str = "\n".join(debug_lines)
     
     return {
         "classification": classification,
