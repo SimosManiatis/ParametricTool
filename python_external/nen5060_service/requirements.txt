@@ -1,6 +1,0 @@
-flask>=2.0
-ghhops-server>=1.0
-rhino3dm>=8.0.0
-trimesh>=3.0.0
-numpy>=1.20.0
-scipy>=1.7.0
